@@ -9,9 +9,20 @@ const { handleQuery } = require("./controllers/researchController");
 
 const app = express();
 
-app.use(cors({
-  origin: "*"
-}));
+router.get("/", async (req, res) => {
+  try {
+    const data = await History.find().sort({ createdAt: -1 });
+
+    // ✅ Always return array
+    res.json(Array.isArray(data) ? data : []);
+    
+  } catch (err) {
+    console.error("History fetch error:", err);
+
+    // ✅ Never break frontend
+    res.status(200).json([]);  
+  }
+});
 app.use(express.json());
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))
