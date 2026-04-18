@@ -111,59 +111,45 @@ const parseEvidence = (data) => {
 
 
 
-/* parseTakeawaysAndInsight — extract from AI text when backend omits them */
-const parseTakeawaysAndInsight = (text = "", currentCase = {}) => {
-  const takeaways = [];
+/* ─── Claude API: extract structured takeaways + insight ───────── */
+const extractWithClaude = async (aiText, patientName, disease, location) => {
+  try {
+    const prompt = `You are a clinical AI assistant. Given this medical AI response, extract:
+1. KEY TAKEAWAYS: exactly 3-4 concise, clinically meaningful bullet points a doctor would act on. Each should be 1 sentence, specific, and actionable or informative.
+2. PERSONALIZED INSIGHT: 1-2 sentences specifically relevant to the patient "${patientName}" with condition "${disease}" ${location ? `in ${location}` : ""}. Make it feel genuinely personalized, not generic.
 
-  // Strategy 1: look for explicit "Key Takeaways:" section
-  const ktMatch = text.match(/key\s+takeaways?\s*[:\-]?\s*/i);
-  if (ktMatch) {
-    const after = text.slice(text.indexOf(ktMatch[0]) + ktMatch[0].length);
-    const bullets = after.split(/\n/).slice(0, 8);
-    for (const line of bullets) {
-      const clean = line.replace(/^[\s\-•*✅✔️☑️\d.]+/, "").trim();
-      if (clean.length > 20 && clean.length < 300) takeaways.push(clean);
-      if (takeaways.length >= 4) break;
-    }
+Return ONLY valid JSON, no markdown, no explanation:
+{
+  "keyTakeaways": ["...", "...", "..."],
+  "personalizedInsight": "..."
+}
+
+Medical AI response to analyze:
+"""
+${aiText.slice(0, 3000)}
+"""`;
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const data = await res.json();
+    const raw = (data.content || []).map(b => b.text || "").join("").trim();
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    return {
+      takeaways : Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
+      insight   : typeof parsed.personalizedInsight === "string" ? parsed.personalizedInsight : "",
+    };
+  } catch (e) {
+    console.warn("Claude extraction failed:", e);
+    return { takeaways: [], insight: "" };
   }
-
-  // Strategy 2: extract "Conclusion:" or "Summary:" sentences
-  if (takeaways.length === 0) {
-    const conclusionMatch = text.match(/(?:conclusion|summary|findings?)\s*[:\-]?\s*([^.!?]+[.!?])/i);
-    if (conclusionMatch) takeaways.push(conclusionMatch[1].trim());
-  }
-
-  // Strategy 3: grab the last 3 meaningful sentences as takeaways
-  if (takeaways.length === 0) {
-    const sentences = (text.match(/[^.!?]{30,}[.!?]/g) || []).filter(s => !s.match(/^\s*[\•\-]/));
-    const last = sentences.slice(-5);
-    for (const s of last) {
-      const clean = s.trim();
-      if (clean.length > 40) takeaways.push(clean);
-      if (takeaways.length >= 3) break;
-    }
-  }
-
-  // Personalized insight: look for "Interpretation:" or "For this patient"
-  let insight = "";
-  const insightPatterns = [
-    /(?:personali[sz]ed\s+insight|for\s+this\s+patient|patient-specific|interpretation)\s*[:\-]?\s*([^.!?]+(?:[.!?](?!\s*[A-Z•]))?)/i,
-    /(?:recommend(?:ation)?|advise?|suggest)\s+(?:for|that|considering)\s+[^.!?]+[.!?]/i,
-  ];
-  for (const pattern of insightPatterns) {
-    const m = text.match(pattern);
-    if (m) { insight = (m[1] || m[0]).trim().slice(0, 280); break; }
-  }
-
-  // Fallback: synthesize insight from patient context
-  if (!insight && currentCase?.patientName) {
-    const disease = currentCase.disease || "this condition";
-    const location = currentCase.location;
-    const firstSent = (text.match(/[^.!?]{40,}[.!?]/) || [])[0] || "";
-    insight = `For ${currentCase.patientName}${location ? ` in ${location}` : ""} diagnosed with ${disease}: ${firstSent.trim()}`.slice(0, 280);
-  }
-
-  return { takeaways, insight };
 };
 
 const LOADING_STEPS = [
@@ -206,6 +192,8 @@ function ChatPage() {
       s.textContent = `
         @keyframes curaBounce{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-8px);opacity:1}}
         @keyframes curaFadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes micPulse{0%,100%{box-shadow:0 0 0 4px rgba(239,68,68,0.25)}50%{box-shadow:0 0 0 8px rgba(239,68,68,0.1)}}
+        @keyframes recDot{0%,100%{opacity:1}50%{opacity:0.2}}
       `;
       document.head.appendChild(s);
     }
@@ -281,19 +269,9 @@ function ChatPage() {
   /* ── typeText: typing animation, then save to DB ── */
   const typeText = (text, updatedCase, data) => {
     let i = 0, temp = "";
-
-    // Use backend values if present; otherwise parse from AI text
-    const backendTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways");
-    const backendInsight   = pick(data,"personalizedInsight","personalized_insight","insight");
-    const parsed           = parseTakeawaysAndInsight(text, updatedCase);
-
-    const normedTakeaways  = (Array.isArray(backendTakeaways) && backendTakeaways.length > 0)
-                               ? backendTakeaways
-                               : parsed.takeaways;
-    const normedInsight    = (typeof backendInsight === "string" && backendInsight.trim())
-                               ? backendInsight
-                               : parsed.insight;
-    const normedRisk       = pick(data,"riskLevel","risk_level","risk") ?? 60;
+    const normedTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways") || [];
+    const normedInsight   = pick(data,"personalizedInsight","personalized_insight","insight") || "";
+    const normedRisk      = pick(data,"riskLevel","risk_level","risk") ?? 60;
 
     setMessages(prev => [...prev, { type:"bot", text:"" }]);
 
@@ -346,6 +324,9 @@ function ChatPage() {
 
     setMessages(prev => [...prev, { type:"user", text:queryText }]);
     setInput(""); setLoading(true); setPatientMode(false);
+    // Clear stale values so cards show a loading state
+    setKeyTakeaways([]);
+    setPersonalizedInsight("");
 
     const updatedCase = { ...currentCase, ...formData, query: queryText };
     setCurrentCase(updatedCase);
@@ -357,24 +338,35 @@ function ChatPage() {
       });
       const data = await res.json();
 
-      const backendTakeaways2 = pick(data,"keyTakeaways","key_takeaways","takeaways");
-      const backendInsight2   = pick(data,"personalizedInsight","personalized_insight","insight");
-      const parsed2           = parseTakeawaysAndInsight(data.aiResponse || data.response || "", updatedCase);
+      const backendTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways");
+      const backendInsight   = pick(data,"personalizedInsight","personalized_insight","insight");
+      const normedRisk       = pick(data,"riskLevel","risk_level","risk") ?? 60;
 
-      const normedTakeaways = (Array.isArray(backendTakeaways2) && backendTakeaways2.length > 0)
-                                ? backendTakeaways2
-                                : parsed2.takeaways;
-      const normedInsight   = (typeof backendInsight2 === "string" && backendInsight2.trim())
-                                ? backendInsight2
-                                : parsed2.insight;
-      const normedRisk      = pick(data,"riskLevel","risk_level","risk") ?? 60;
-
-      setEvidence(parseEvidence(data));  // parses from AI text if top-level arrays are empty
+      setEvidence(parseEvidence(data));
       setRiskLevel(normedRisk);
-      setKeyTakeaways(Array.isArray(normedTakeaways) ? normedTakeaways : []);
-      setPersonalizedInsight(typeof normedInsight==="string" ? normedInsight : "");
 
-      typeText(data.aiResponse || "No response received.", updatedCase, data);
+      const aiText = data.aiResponse || data.response || "";
+
+      const hasTakeaways = Array.isArray(backendTakeaways) && backendTakeaways.length > 0;
+      const hasInsight   = typeof backendInsight === "string" && backendInsight.trim().length > 10;
+
+      if (hasTakeaways) setKeyTakeaways(backendTakeaways);
+      if (hasInsight)   setPersonalizedInsight(backendInsight);
+
+      // Typing animation starts immediately; Claude extraction runs in parallel
+      typeText(aiText || "No response received.", updatedCase, data);
+
+      if (!hasTakeaways || !hasInsight) {
+        extractWithClaude(
+          aiText,
+          updatedCase.patientName || "the patient",
+          updatedCase.disease     || "this condition",
+          updatedCase.location    || ""
+        ).then(({ takeaways, insight }) => {
+          if (!hasTakeaways && takeaways.length > 0) setKeyTakeaways(takeaways);
+          if (!hasInsight   && insight)              setPersonalizedInsight(insight);
+        });
+      }
     } catch (err) {
       console.error(err);
       setMessages(prev => [...prev, { type:"bot", text:"Server error. Please try again." }]);
@@ -384,12 +376,34 @@ function ChatPage() {
   };
 
   /* ── voice ── */
+  const recognizerRef = useRef(null);
+
   const startListening = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return alert("Voice not supported.");
-    const r = new SR(); r.lang="en-US"; r.start(); setListening(true);
-    r.onresult = e => setInput(e.results[0][0].transcript);
-    r.onend = () => setListening(false); r.onerror = () => setListening(false);
+    if (!SR) return alert("Voice input is not supported in this browser. Try Chrome.");
+
+    // Toggle off if already listening
+    if (listening) {
+      recognizerRef.current?.stop();
+      setListening(false);
+      return;
+    }
+
+    const r = new SR();
+    r.lang = "en-US";
+    r.continuous = false;
+    r.interimResults = false;
+    recognizerRef.current = r;
+
+    r.start();
+    setListening(true);
+
+    r.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setInput(transcript);
+    };
+    r.onend   = () => setListening(false);
+    r.onerror = () => setListening(false);
   };
 
   /* ── PDF export ── */
@@ -536,13 +550,17 @@ function ChatPage() {
                                 ? keyTakeaways.map((k,idx)=>(
                                     <div key={idx} style={takeawayItem}>
                                       <span style={{...takeawayDot, background:"#0891b2"}}/>
-                                      <span style={{color:"#1e293b",fontSize:"0.87rem",lineHeight:1.6}}>{k}</span>
+                                      <span style={{color:"#1e293b", fontSize:"0.87rem", lineHeight:1.6}}>{k}</span>
                                     </div>
                                   ))
-                                : <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0"}}>
-                                    <span style={{fontSize:"1.1rem"}}>⏳</span>
+                                : <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
+                                    <div style={{display:"flex",gap:"4px"}}>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                    </div>
                                     <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
-                                      {loading?"Extracting key insights from clinical data…":"Analysis complete — no structured takeaways found."}
+                                      Extracting clinical takeaways…
                                     </p>
                                   </div>}
                             </div>
@@ -555,10 +573,14 @@ function ChatPage() {
                                 ? <p style={{margin:0,lineHeight:1.7,fontSize:"0.9rem",color:"#1e293b",borderLeft:"3px solid #16a34a",paddingLeft:"10px"}}>
                                     {personalizedInsight}
                                   </p>
-                                : <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0"}}>
-                                    <span style={{fontSize:"1.1rem"}}>⏳</span>
+                                : <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
+                                    <div style={{display:"flex",gap:"4px"}}>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
+                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                    </div>
                                     <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
-                                      {loading?"Personalizing insight for this patient…":"No patient-specific insight was generated."}
+                                      Personalizing insight for this patient…
                                     </p>
                                   </div>}
                             </div>
@@ -588,18 +610,35 @@ function ChatPage() {
               </div>
 
               <div style={stickyInputBar(darkMode)}>
-                <input
-                  value={input} onChange={e=>setInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&handleSend({})}
-                  placeholder={listening?"Listening…":"Ask a follow-up clinical question..."}
-                  style={inputBox(darkMode)}
-                />
-                <button onClick={()=>handleSend({})} style={iconBtn("#0369a1")} title="Send">
-                  <FaPaperPlane style={{fontSize:"0.82rem"}}/>
-                </button>
-                <button onClick={startListening} style={iconBtn(listening?"#ef4444":"#64748b")} title="Voice">
-                  <FaMicrophone style={{fontSize:"0.82rem"}}/>
-                </button>
+                {listening && (
+                  <div style={recordingBanner}>
+                    <span style={recordingDot}/>
+                    <span style={{fontSize:"0.78rem",fontWeight:600,color:"#dc2626"}}>Recording… tap mic to stop</span>
+                  </div>
+                )}
+                <div style={{display:"flex",gap:"8px",width:"100%"}}>
+                  <input
+                    value={input} onChange={e=>setInput(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&handleSend({})}
+                    placeholder={listening?"🎙 Listening — speak now…":"Ask a follow-up clinical question..."}
+                    style={{...inputBox(darkMode), ...(listening ? {borderColor:"#ef4444",boxShadow:"0 0 0 2px rgba(239,68,68,0.2)"} : {})}}
+                  />
+                  <button onClick={()=>handleSend({})} style={iconBtn("#0369a1")} title="Send">
+                    <FaPaperPlane style={{fontSize:"0.82rem"}}/>
+                  </button>
+                  <button
+                    onClick={startListening}
+                    style={{
+                      ...iconBtn(listening ? "#ef4444" : "#64748b"),
+                      position:"relative",
+                      boxShadow: listening ? "0 0 0 4px rgba(239,68,68,0.25)" : "none",
+                      animation: listening ? "micPulse 1.2s ease-in-out infinite" : "none",
+                    }}
+                    title={listening ? "Stop recording" : "Start voice input"}
+                  >
+                    <FaMicrophone style={{fontSize:"0.82rem"}}/>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -643,9 +682,18 @@ function ChatPage() {
                     : evidence.trials.map((t,i)=>(
                         <div key={i} style={trialCard(darkMode)}>
                           <p style={{margin:"0 0 8px",fontWeight:700,fontSize:"0.84rem",lineHeight:1.4,color:"#1e293b"}}>{t.title}</p>
-                          <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                            <span style={trialBadge("#16a34a")}>● {t.status}</span>
-                            <span style={trialBadge("#0369a1")}>{t.location}</span>
+                          <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
+                            <span style={trialBadge(t.status==="COMPLETED"?"#16a34a":t.status==="RECRUITING"?"#0369a1":"#f59e0b")}>
+                              ● {t.status || "UNKNOWN"}
+                            </span>
+                            {(t.location || currentCase?.location) && (
+                              <span style={{...trialBadge("#6366f1"), display:"flex", alignItems:"center", gap:"3px"}}>
+                                <FaMapMarkerAlt style={{fontSize:"0.6rem"}}/> {t.location || currentCase?.location}
+                              </span>
+                            )}
+                            {t.phase && (
+                              <span style={trialBadge("#64748b")}>Phase {t.phase}</span>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -681,7 +729,7 @@ const cardLabel = (c)    => ({ fontSize:"0.63rem", fontWeight:800, textTransform
 const takeawayItem       = { display:"flex", alignItems:"center", gap:"8px", fontSize:"0.87rem", padding:"3px 0", lineHeight:1.5 };
 const takeawayDot        = { width:"6px", height:"6px", borderRadius:"50%", background:"#0891b2", flexShrink:0 };
 const explainBtn = (a)   => ({ width:"fit-content", marginTop:"10px", padding:"10px 20px", borderRadius:"25px", border:"none", cursor:"pointer", display:"flex", alignItems:"center", gap:"8px", fontSize:"0.85rem", fontWeight:"600", background:a?"#16a34a":"#ffffff", color:a?"#ffffff":"#0369a1", boxShadow:"0 4px 12px rgba(0,0,0,0.15)", transition:"all 0.3s ease" });
-const stickyInputBar = (d) => ({ flexShrink:0, display:"flex", gap:"8px", padding:"12px 24px", background:d?"#1e293b":"#ffffff", borderTop:`1px solid ${d?"#334155":"#e2e8f0"}` });
+const stickyInputBar = (d) => ({ flexShrink:0, display:"flex", flexDirection:"column", gap:"0", padding:"10px 24px 12px", background:d?"#1e293b":"#ffffff", borderTop:`1px solid ${d?"#334155":"#e2e8f0"}` });
 const inputBox = (d)     => ({ flex:1, padding:"10px 18px", borderRadius:"24px", border:`1.5px solid ${d?"#334155":"#cbd5e1"}`, outline:"none", background:d?"#0f172a":"#f8fafc", color:d?"#e2e8f0":"#1e293b", fontSize:"0.9rem" });
 const iconBtn = (c)      => ({ width:"40px", height:"40px", borderRadius:"50%", border:"none", background:c, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 });
 const progressBar        = { height:"7px", background:"#e2e8f0", borderRadius:"4px", overflow:"hidden" };
@@ -700,5 +748,7 @@ const trialCard=(d)      => ({ padding:"11px 13px", borderRadius:"10px", backgro
 const sourceLink         = { display:"inline-flex", alignItems:"center", color:"#0369a1", fontSize:"0.74rem", fontWeight:600, textDecoration:"none" };
 const trialBadge=(c)     => ({ fontSize:"0.72rem", fontWeight:600, color:c, background:c+"18", padding:"2px 8px", borderRadius:"10px" });
 const emptyText          = { fontSize:"0.8rem", color:"#94a3b8", fontStyle:"italic", textAlign:"center", padding:"16px 0" };
+const recordingBanner    = { display:"flex", alignItems:"center", gap:"8px", padding:"6px 12px", background:"#fef2f2", borderRadius:"8px", border:"1px solid #fecaca", marginBottom:"6px", width:"100%" };
+const recordingDot       = { width:"10px", height:"10px", borderRadius:"50%", background:"#ef4444", flexShrink:0, animation:"recDot 1s ease-in-out infinite", display:"inline-block" };
 
 export default ChatPage;
