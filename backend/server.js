@@ -9,20 +9,15 @@ const { handleQuery } = require("./controllers/researchController");
 
 const app = express();
 
-router.get("/", async (req, res) => {
-  try {
-    const data = await History.find().sort({ createdAt: -1 });
-
-    // ✅ Always return array
-    res.json(Array.isArray(data) ? data : []);
-    
-  } catch (err) {
-    console.error("History fetch error:", err);
-
-    // ✅ Never break frontend
-    res.status(200).json([]);  
-  }
-});
+// ✅ Middleware
+app.use(cors({
+  origin: [
+    "https://curalink-peach.vercel.app",
+    "https://curalink-181hqkw81-kumudhasris-projects.vercel.app"
+  ],
+  methods: ["GET", "POST", "DELETE"],
+  credentials: true
+}));
 app.use(express.json());
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))

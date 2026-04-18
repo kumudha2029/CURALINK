@@ -1,70 +1,61 @@
 const express = require("express");
-const router = express.Router();
-const History = require("../models/History");
+const cors = require("cors");
+const mongoose = require("mongoose");
+require("dotenv").config();
 
-// ✅ SAVE CASE
-router.post("/save", async (req, res) => {
-  try {
-    const {
-      patientName,
-      disease,
-      symptoms,
-      messages,
-      primarySources,
-      clinicalTrials,
-      response,
-      riskLevel,
-      keyTakeaways,
-      personalizedInsight
-    } = req.body;
+const researchRoutes = require("./routes/research");
+const historyRoutes = require("./routes/history");
+const { handleQuery } = require("./controllers/researchController");
 
-    const newItem = new History({
-      patientName,
-      disease,
-      symptoms,
-      messages,
-      primarySources,
-      clinicalTrials,
-      response,
-      riskLevel: riskLevel || 60,
-      keyTakeaways: keyTakeaways || [],
-      personalizedInsight: personalizedInsight || ""
-    });
+const app = express();
 
-    const saved = await newItem.save();
-    res.json(saved);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+
+// ✅ CORS (handles your Vercel URLs)
+app.use(cors({
+  origin: [
+    "https://curalink-peach.vercel.app",
+    "https://curalink-181hqkw81-kumudhasris-projects.vercel.app"
+  ],
+  methods: ["GET", "POST", "DELETE"],
+  credentials: true
+}));
+
+
+// ✅ Middleware
+app.use(express.json());
+
+
+// ✅ MongoDB Connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connected ✅"))
+  .catch((err) => console.log("MongoDB Connection Error:", err));
+
+
+// ✅ Health Check Route
+app.get("/", (req, res) => {
+  res.send("Backend running 🚀");
 });
 
-router.get("/", async (req, res) => {
-  try {
-    const data = await History.find().sort({ createdAt: -1 });
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// ✅ GET SINGLE CASE
-router.get("/:id", async (req, res) => {
-  try {
-    const item = await History.findById(req.params.id);
-    if (!item) return res.status(404).json({ error: "Case not found" });
-    res.json(item);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+
+// ✅ API ROUTES
+app.use("/api/research", researchRoutes);
+app.use("/api/history", historyRoutes);
+
+
+// 🔥 CHAT ROUTE (main AI endpoint)
+app.post("/api/chat", handleQuery);
+
+
+// ✅ GLOBAL ERROR HANDLER (IMPORTANT)
+app.use((err, req, res, next) => {
+  console.error("Server Error:", err.stack);
+  res.status(500).json({ error: "Something went wrong" });
 });
 
-// ✅ DELETE CASE (NEW)
-router.delete("/:id", async (req, res) => {
-  try {
-    await History.findByIdAndDelete(req.params.id);
-    res.json({ message: "Deleted successfully" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-module.exports = router;
+// ✅ START SERVER
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
