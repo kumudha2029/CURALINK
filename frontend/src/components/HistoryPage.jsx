@@ -27,11 +27,22 @@ function HistoryPage() {
   }, []);
 
   const fetchHistory = () => {
-    fetch(`${BASE_URL}/api/history`)
-      .then((res) => res.json())
-      .then((data) => setHistory(data))
-      .catch((err) => console.error("Error fetching history:", err));
-  };
+  fetch(`${BASE_URL}/api/history`)
+    .then((res) => res.json())
+    .then((data) => {
+      // ✅ FIX: Always ensure array
+      if (Array.isArray(data)) {
+        setHistory(data);
+      } else {
+        console.warn("Invalid data format:", data);
+        setHistory([]);
+      }
+    })
+    .catch((err) => {
+      console.error("Error fetching history:", err);
+      setHistory([]);
+    });
+};
 
   const confirmDelete = async () => {
     if (!deleteId) return;
