@@ -1,61 +1,53 @@
 const express = require("express");
-const cors = require("cors");
-const mongoose = require("mongoose");
-require("dotenv").config();
-
-const researchRoutes = require("./routes/research");
-const historyRoutes = require("./routes/history");
-const { handleQuery } = require("./controllers/researchController");
-
-const app = express();
+const router = express.Router();
+const History = require("../models/History");
 
 
-// ✅ CORS (handles your Vercel URLs)
-app.use(cors({
-  origin: [
-    "https://curalink-peach.vercel.app",
-    "https://curalink-181hqkw81-kumudhasris-projects.vercel.app"
-  ],
-  methods: ["GET", "POST", "DELETE"],
-  credentials: true
-}));
-
-
-// ✅ Middleware
-app.use(express.json());
-
-
-// ✅ MongoDB Connection
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected ✅"))
-  .catch((err) => console.log("MongoDB Connection Error:", err));
-
-
-// ✅ Health Check Route
-app.get("/", (req, res) => {
-  res.send("Backend running 🚀");
+// ✅ SAVE
+router.post("/save", async (req, res) => {
+  try {
+    const newItem = new History(req.body);
+    const saved = await newItem.save();
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 
-// ✅ API ROUTES
-app.use("/api/research", researchRoutes);
-app.use("/api/history", historyRoutes);
-
-
-// 🔥 CHAT ROUTE (main AI endpoint)
-app.post("/api/chat", handleQuery);
-
-
-// ✅ GLOBAL ERROR HANDLER (IMPORTANT)
-app.use((err, req, res, next) => {
-  console.error("Server Error:", err.stack);
-  res.status(500).json({ error: "Something went wrong" });
+// ✅ GET ALL
+router.get("/", async (req, res) => {
+  try {
+    const data = await History.find().sort({ createdAt: -1 });
+    res.json(Array.isArray(data) ? data : []);
+  } catch (err) {
+    console.error(err);
+    res.status(200).json([]);
+  }
 });
 
 
-// ✅ START SERVER
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// ✅ GET ONE
+router.get("/:id", async (req, res) => {
+  try {
+    const item = await History.findById(req.params.id);
+    if (!item) return res.status(404).json({ error: "Not found" });
+    res.json(item);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
+
+
+// ✅ DELETE
+router.delete("/:id", async (req, res) => {
+  try {
+    await History.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+module.exports = router;
