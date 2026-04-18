@@ -111,85 +111,97 @@ const parseEvidence = (data) => {
 
 
 
-/* Local regex parser: instant takeaways + insight (no network) */
+/* Local parser: extracts takeaways + insight directly from AI response text */
 const parseTakeawaysAndInsight = (aiText = "", caseObj = {}) => {
-  const takeaways = [];
-  const lines = aiText.split(/\n/);
-  for (const line of lines) {
-    const stripped = line.replace(/^[\s\-*\d.]+/, "").trim();
-    if (stripped.length > 30 && stripped.length < 300 &&
-        /\b(risk|treatment|recommend|finding|trial|evidence|patient|therapy|outcome|suggest|indicate|show|reveal|associat)\b/i.test(stripped)) {
-      takeaways.push(stripped);
-      if (takeaways.length >= 4) break;
-    }
-  }
   const patientName = caseObj.patientName || "the patient";
   const disease     = caseObj.disease     || "this condition";
   const location    = caseObj.location    || "";
-  const sentMatch   = aiText.match(/[^.!?]*\b(patient|treatment|therapy|risk|recommend)[^.!?]*[.!?]/i);
-  const insight = sentMatch
-    ? "For " + patientName + " with " + disease + (location ? " in " + location : "") + ": " + sentMatch[0].trim()
-    : "";
+  const takeaways   = [];
+
+  // 1. Pull bullet points from "Key Research Insights" section
+  const kriMatch = aiText.match(/Key Research Insights[:\s\S]*?(?=Clinical Trials|Interpretation|Conclusion|$)/i);
+  if (kriMatch) {
+    const bullets = kriMatch[0].split(/\u2022|\*|\n-/).slice(1);
+    for (const b of bullets) {
+      const t = b.replace(/\(\d{4}\)[^\n]*/g,"").replace(/\s+/g," ").trim();
+      if (t.length > 20 && t.length < 250) { takeaways.push(t); if (takeaways.length >= 4) break; }
+    }
+  }
+
+  // 2. Fallback: pull from Interpretation or Conclusion section
+  if (takeaways.length === 0) {
+    const sections = ["Interpretation","Conclusion","Key Takeaway","Summary"];
+    for (const sec of sections) {
+      const m = aiText.match(new RegExp(sec + "[:\\s]+(.*?)(?=\\n\\n|$)", "is"));
+      if (m) {
+        const sents = m[1].match(/[^.!?]+[.!?]+/g) || [];
+        for (const s of sents) {
+          const t = s.trim();
+          if (t.length > 30) { takeaways.push(t); if (takeaways.length >= 4) break; }
+        }
+        if (takeaways.length > 0) break;
+      }
+    }
+  }
+
+  // 3. Last resort: any sentence with clinical keywords
+  if (takeaways.length === 0) {
+    const sents = aiText.match(/[^.!?]+[.!?]+/g) || [];
+    for (const s of sents) {
+      const t = s.replace(/^[\s\u2022\-*\d.]+/,"").trim();
+      if (t.length > 40 && t.length < 250 &&
+          /\b(risk|treatment|recommend|therapy|outcome|evidence|trial|diagnosis)\b/i.test(t)) {
+        takeaways.push(t);
+        if (takeaways.length >= 4) break;
+      }
+    }
+  }
+
+  // 4. Personalized insight from Condition Overview or Interpretation
+  let insight = "";
+  const condMatch = aiText.match(/Condition Overview[:\s]+([^\n]+)/i);
+  const interMatch = aiText.match(/Interpretation[:\s]+([^\n]+)/i);
+  const concMatch  = aiText.match(/Conclusion[:\s]+([^\n]+)/i);
+  const base = (condMatch || interMatch || concMatch)?.[1]?.trim() || "";
+  if (base.length > 20) {
+    insight = patientName + " with " + disease +
+      (location ? " in " + location : "") + ": " + base;
+  }
+
   return { takeaways, insight };
 };
 
 /* ─── Claude API: extract structured takeaways + insight ───────── */
 const EMPTY_PHRASES = ['no research data found','no data found for this','no results found','unable to find any','no information available','could not find any research'];
 
+/* Claude API extraction - runs only if VITE_ANTHROPIC_API_KEY is set */
 const extractWithClaude = async (aiText, patientName, disease, location) => {
-  const textLower = (aiText || '').toLowerCase().trim();
-  if (!textLower || textLower.length < 40) return { takeaways: [], insight: '' };
-  // Only skip if the ENTIRE response is a dead-end (short + matches empty phrase)
-  const isEmptyResponse = textLower.length < 120 && EMPTY_PHRASES.some(p => textLower.includes(p));
-  if (isEmptyResponse) return { takeaways: [], insight: '' };
+  const key = (typeof import_meta_env !== 'undefined' && import.meta.env.VITE_ANTHROPIC_API_KEY) || '';
+  if (!key || aiText.length < 40) return { takeaways: [], insight: '' };
   try {
-    const prompt = `You are a clinical AI assistant. Given this medical AI response, extract:
-1. KEY TAKEAWAYS: exactly 3-4 concise, clinically meaningful bullet points a doctor would act on. Each should be 1 sentence, specific, and actionable or informative.
-2. PERSONALIZED INSIGHT: 1-2 sentences specifically relevant to the patient "${patientName}" with condition "${disease}" ${location ? `in ${location}` : ""}. Make it feel genuinely personalized, not generic.
-
-Return ONLY valid JSON, no markdown, no explanation:
-{
-  "keyTakeaways": ["...", "...", "..."],
-  "personalizedInsight": "..."
-}
-
-Medical AI response to analyze:
-"""
-${aiText.slice(0, 3000)}
-"""`;
-
+    const prompt = `You are a clinical AI assistant. Extract from this medical response:\n1. KEY TAKEAWAYS: 3-4 bullet points a doctor would act on (1 sentence each).\n2. PERSONALIZED INSIGHT: 1-2 sentences for patient "${patientName}" with "${disease}"${location ? ` in ${location}` : ''}.\nReturn ONLY valid JSON: {"keyTakeaways": [...], "personalizedInsight": "..."}\nResponse: ${aiText.slice(0, 2500)}`;
     const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), 20000);
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: controller.signal,
+    setTimeout(() => controller.abort(), 20000);
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal: controller.signal,
       headers: {
-        "Content-Type": "application/json",
-        "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY || "",
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 500,
-        messages: [{ role: "user", content: prompt }],
-      }),
+      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+        messages: [{ role: 'user', content: prompt }] }),
     });
-    clearTimeout(timeoutId);
-    const data = await res.json();
-    if (!res.ok) throw new Error(`API ${res.status}`);
-    const raw = (data.content || []).map(b => b.text || "").join("").trim();
-    const clean = raw.replace(/```json|```/g, "").trim();
-    let parsed;
-    try { parsed = JSON.parse(clean); } catch { return { takeaways: [], insight: "" }; }
+    if (!res.ok) return { takeaways: [], insight: '' };
+    const d = await res.json();
+    const txt = (d.content || []).map(b => b.text || '').join('').replace(/```json|```/g,'').trim();
+    const p = JSON.parse(txt);
     return {
-      takeaways : Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
-      insight   : typeof parsed.personalizedInsight === "string" ? parsed.personalizedInsight : "",
+      takeaways: Array.isArray(p.keyTakeaways) ? p.keyTakeaways : [],
+      insight: typeof p.personalizedInsight === 'string' ? p.personalizedInsight : '',
     };
-  } catch (e) {
-    console.warn("Claude extraction failed:", e);
-    return { takeaways: [], insight: "" };
-  }
+  } catch { return { takeaways: [], insight: '' }; }
 };
 
 const LOADING_STEPS = [
@@ -393,9 +405,10 @@ function ChatPage() {
           setPersonalizedInsight(local.insight);
         }
 
-        // Step 2: Claude API upgrade if still missing
-        const needsClaudeUpgrade = (!hasTakeaways && finalTakeaways.length === 0) ||
-                                   (!hasInsight   && !finalInsight);
+        // Step 2: Claude API upgrade only if API key is configured
+        const apiKey = typeof import !== 'undefined' ? (import.meta?.env?.VITE_ANTHROPIC_API_KEY || '') : '';
+        const needsClaudeUpgrade = !!apiKey && ((!hasTakeaways && finalTakeaways.length === 0) ||
+                                   (!hasInsight   && !finalInsight));
         if (needsClaudeUpgrade) {
           setExtracting(true);
           try {
