@@ -111,6 +111,61 @@ const parseEvidence = (data) => {
 
 
 
+/* parseTakeawaysAndInsight — extract from AI text when backend omits them */
+const parseTakeawaysAndInsight = (text = "", currentCase = {}) => {
+  const takeaways = [];
+
+  // Strategy 1: look for explicit "Key Takeaways:" section
+  const ktMatch = text.match(/key\s+takeaways?\s*[:\-]?\s*/i);
+  if (ktMatch) {
+    const after = text.slice(text.indexOf(ktMatch[0]) + ktMatch[0].length);
+    const bullets = after.split(/\n/).slice(0, 8);
+    for (const line of bullets) {
+      const clean = line.replace(/^[\s\-•*✅✔️☑️\d.]+/, "").trim();
+      if (clean.length > 20 && clean.length < 300) takeaways.push(clean);
+      if (takeaways.length >= 4) break;
+    }
+  }
+
+  // Strategy 2: extract "Conclusion:" or "Summary:" sentences
+  if (takeaways.length === 0) {
+    const conclusionMatch = text.match(/(?:conclusion|summary|findings?)\s*[:\-]?\s*([^.!?]+[.!?])/i);
+    if (conclusionMatch) takeaways.push(conclusionMatch[1].trim());
+  }
+
+  // Strategy 3: grab the last 3 meaningful sentences as takeaways
+  if (takeaways.length === 0) {
+    const sentences = (text.match(/[^.!?]{30,}[.!?]/g) || []).filter(s => !s.match(/^\s*[\•\-]/));
+    const last = sentences.slice(-5);
+    for (const s of last) {
+      const clean = s.trim();
+      if (clean.length > 40) takeaways.push(clean);
+      if (takeaways.length >= 3) break;
+    }
+  }
+
+  // Personalized insight: look for "Interpretation:" or "For this patient"
+  let insight = "";
+  const insightPatterns = [
+    /(?:personali[sz]ed\s+insight|for\s+this\s+patient|patient-specific|interpretation)\s*[:\-]?\s*([^.!?]+(?:[.!?](?!\s*[A-Z•]))?)/i,
+    /(?:recommend(?:ation)?|advise?|suggest)\s+(?:for|that|considering)\s+[^.!?]+[.!?]/i,
+  ];
+  for (const pattern of insightPatterns) {
+    const m = text.match(pattern);
+    if (m) { insight = (m[1] || m[0]).trim().slice(0, 280); break; }
+  }
+
+  // Fallback: synthesize insight from patient context
+  if (!insight && currentCase?.patientName) {
+    const disease = currentCase.disease || "this condition";
+    const location = currentCase.location;
+    const firstSent = (text.match(/[^.!?]{40,}[.!?]/) || [])[0] || "";
+    insight = `For ${currentCase.patientName}${location ? ` in ${location}` : ""} diagnosed with ${disease}: ${firstSent.trim()}`.slice(0, 280);
+  }
+
+  return { takeaways, insight };
+};
+
 const LOADING_STEPS = [
   "Scanning clinical knowledge base...",
   "Cross-referencing biomarkers...",
@@ -226,9 +281,19 @@ function ChatPage() {
   /* ── typeText: typing animation, then save to DB ── */
   const typeText = (text, updatedCase, data) => {
     let i = 0, temp = "";
-    const normedTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways") || [];
-    const normedInsight   = pick(data,"personalizedInsight","personalized_insight","insight") || "";
-    const normedRisk      = pick(data,"riskLevel","risk_level","risk") ?? 60;
+
+    // Use backend values if present; otherwise parse from AI text
+    const backendTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways");
+    const backendInsight   = pick(data,"personalizedInsight","personalized_insight","insight");
+    const parsed           = parseTakeawaysAndInsight(text, updatedCase);
+
+    const normedTakeaways  = (Array.isArray(backendTakeaways) && backendTakeaways.length > 0)
+                               ? backendTakeaways
+                               : parsed.takeaways;
+    const normedInsight    = (typeof backendInsight === "string" && backendInsight.trim())
+                               ? backendInsight
+                               : parsed.insight;
+    const normedRisk       = pick(data,"riskLevel","risk_level","risk") ?? 60;
 
     setMessages(prev => [...prev, { type:"bot", text:"" }]);
 
@@ -292,8 +357,16 @@ function ChatPage() {
       });
       const data = await res.json();
 
-      const normedTakeaways = pick(data,"keyTakeaways","key_takeaways","takeaways") || [];
-      const normedInsight   = pick(data,"personalizedInsight","personalized_insight","insight") || "";
+      const backendTakeaways2 = pick(data,"keyTakeaways","key_takeaways","takeaways");
+      const backendInsight2   = pick(data,"personalizedInsight","personalized_insight","insight");
+      const parsed2           = parseTakeawaysAndInsight(data.aiResponse || data.response || "", updatedCase);
+
+      const normedTakeaways = (Array.isArray(backendTakeaways2) && backendTakeaways2.length > 0)
+                                ? backendTakeaways2
+                                : parsed2.takeaways;
+      const normedInsight   = (typeof backendInsight2 === "string" && backendInsight2.trim())
+                                ? backendInsight2
+                                : parsed2.insight;
       const normedRisk      = pick(data,"riskLevel","risk_level","risk") ?? 60;
 
       setEvidence(parseEvidence(data));  // parses from AI text if top-level arrays are empty
@@ -462,22 +535,32 @@ function ChatPage() {
                               {keyTakeaways.length>0
                                 ? keyTakeaways.map((k,idx)=>(
                                     <div key={idx} style={takeawayItem}>
-                                      <span style={takeawayDot}/>
-                                      <span style={{color:"#1e293b"}}>{k}</span>
+                                      <span style={{...takeawayDot, background:"#0891b2"}}/>
+                                      <span style={{color:"#1e293b",fontSize:"0.87rem",lineHeight:1.6}}>{k}</span>
                                     </div>
                                   ))
-                                : <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
-                                    {loading?"Generating…":"No takeaways returned by the server."}
-                                  </p>}
+                                : <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0"}}>
+                                    <span style={{fontSize:"1.1rem"}}>⏳</span>
+                                    <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
+                                      {loading?"Extracting key insights from clinical data…":"Analysis complete — no structured takeaways found."}
+                                    </p>
+                                  </div>}
                             </div>
 
                             <div style={aiCard("#16a34a")}>
                               <div style={cardLabel("#16a34a")}>
                                 <FaUserMd style={{marginRight:"5px"}}/> PERSONALIZED INSIGHT
                               </div>
-                              <p style={{margin:0,lineHeight:1.6,fontSize:"0.9rem",color:"#1e293b"}}>
-                                {personalizedInsight||(loading?"Generating…":"No insight returned by the server.")}
-                              </p>
+                              {personalizedInsight
+                                ? <p style={{margin:0,lineHeight:1.7,fontSize:"0.9rem",color:"#1e293b",borderLeft:"3px solid #16a34a",paddingLeft:"10px"}}>
+                                    {personalizedInsight}
+                                  </p>
+                                : <div style={{display:"flex",alignItems:"center",gap:"8px",padding:"6px 0"}}>
+                                    <span style={{fontSize:"1.1rem"}}>⏳</span>
+                                    <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
+                                      {loading?"Personalizing insight for this patient…":"No patient-specific insight was generated."}
+                                    </p>
+                                  </div>}
                             </div>
                           </>
                         )}
