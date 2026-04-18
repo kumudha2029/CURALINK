@@ -38,79 +38,80 @@ function CasePage() {
   const getSources = (data) =>
     data.primarySources || data.topPapers || data.papers || data.sources || [];
 
-  // Parse takeaways from DB field OR directly from the AI response text
-  const getKeyTakeaways = (data) => {
-    const val = data.keyTakeaways || data.key_takeaways || data.takeaways;
-    if (Array.isArray(val) && val.length > 0) return val;
-
-    // Fall back: parse from the raw AI response text
-    const aiText = data.response || data.aiResponse || data.ai_response || "";
-    if (!aiText) return [];
+  const parseFromText = (aiText, patientName, disease, location) => {
     const takeaways = [];
 
-    // Try "Key Research Insights" bullet section
-    const kriMatch = aiText.match(/Key Research Insights[\s\S]*?(?=Clinical Trials|Interpretation|Conclusion|$)/i);
-    if (kriMatch) {
-      const bullets = kriMatch[0].split(/\u2022|
-\u2022|
--|
-\*/);
-      for (const b of bullets.slice(1)) {
-        const t = b.replace(/\s*\u2014[^
-]*/g,"").replace(/\s+/g," ").trim();
-        if (t.length > 20 && t.length < 250) { takeaways.push(t); if (takeaways.length >= 4) break; }
-      }
-    }
-
-    // Try Interpretation / Conclusion sentences
-    if (takeaways.length === 0) {
-      for (const sec of ["Interpretation","Conclusion","Summary"]) {
-        const m = aiText.match(new RegExp(sec + "[:\s]+([\s\S]*?)(?=\n\n|$)", "i"));
-        if (m) {
-          const sents = (m[1].match(/[^.!?]+[.!?]+/g) || []).map(s => s.trim()).filter(s => s.length > 30);
-          takeaways.push(...sents.slice(0, 4));
-          if (takeaways.length > 0) break;
-        }
-      }
-    }
-
-    // Last resort: any sentence with clinical keywords
-    if (takeaways.length === 0) {
-      const sents = aiText.match(/[^.!?]+[.!?]+/g) || [];
-      for (const s of sents) {
-        const t = s.replace(/^[\s\u2022\-*\d.]+/,"").trim();
-        if (t.length > 40 && t.length < 250 &&
-            /(risk|treatment|recommend|therapy|outcome|evidence|trial|diagnosis|patient)/i.test(t)) {
+    // 1. Extract bullets from "Key Research Insights" section
+    const kriIdx = aiText.indexOf("Key Research Insights");
+    if (kriIdx !== -1) {
+      const endIdx = aiText.search(/Clinical Trials|Interpretation|Conclusion/i);
+      const section = aiText.slice(kriIdx, endIdx > kriIdx ? endIdx : kriIdx + 800);
+      const lines = section.split("\n");
+      for (const line of lines) {
+        const t = line.replace(/^[\s\-*]+/, "").replace(/\s*---[^\n]*/g, "").trim();
+        if (t.length > 20 && t.length < 250 && !t.startsWith("Key Research")) {
           takeaways.push(t);
           if (takeaways.length >= 4) break;
         }
       }
     }
-    return takeaways;
+
+    // 2. Try Interpretation / Conclusion if still empty
+    if (takeaways.length === 0) {
+      for (const sec of ["Interpretation", "Conclusion", "Summary"]) {
+        const idx = aiText.indexOf(sec + ":");
+        if (idx !== -1) {
+          const chunk = aiText.slice(idx + sec.length + 1, idx + 600);
+          const sents = chunk.match(/[^.!?]{30,200}[.!?]/g) || [];
+          takeaways.push(...sents.slice(0, 4).map(s => s.trim()));
+          if (takeaways.length > 0) break;
+        }
+      }
+    }
+
+    // 3. Last resort: clinical keyword sentences
+    if (takeaways.length === 0) {
+      const sents = aiText.match(/[^.!?]{40,220}[.!?]/g) || [];
+      for (const s of sents) {
+        const t = s.replace(/^[\s\-*\d.]+/, "").trim();
+        if (/\b(risk|treatment|recommend|therapy|outcome|evidence|trial|diagnosis|patient)\b/i.test(t)) {
+          takeaways.push(t);
+          if (takeaways.length >= 4) break;
+        }
+      }
+    }
+
+    // Build personalized insight
+    let insight = "";
+    for (const sec of ["Condition Overview", "Interpretation", "Conclusion"]) {
+      const idx = aiText.indexOf(sec + ":");
+      if (idx !== -1) {
+        const firstSent = aiText.slice(idx + sec.length + 1).match(/[^.!?]{20,200}[.!?]/);
+        if (firstSent) {
+          insight = patientName + " with " + disease +
+            (location ? " in " + location : "") + ": " + firstSent[0].trim();
+          break;
+        }
+      }
+    }
+
+    return { takeaways, insight };
   };
 
-  // Parse insight from DB field OR directly from the AI response text
+  const getKeyTakeaways = (data) => {
+    const val = data.keyTakeaways || data.key_takeaways || data.takeaways;
+    if (Array.isArray(val) && val.length > 0) return val;
+    const aiText = data.response || data.aiResponse || data.ai_response || "";
+    if (!aiText) return [];
+    return parseFromText(aiText, data.patientName || "The patient", data.disease || "this condition", data.location || "").takeaways;
+  };
+
   const getPersonalizedInsight = (data) => {
     const val = data.personalizedInsight || data.personalized_insight || data.insight || "";
     if (typeof val === "string" && val.trim().length > 10) return val.trim();
-
-    // Fall back: build insight from Condition Overview / Interpretation in AI text
     const aiText = data.response || data.aiResponse || data.ai_response || "";
-    const name = data.patientName || "The patient";
-    const disease = data.disease || "this condition";
-    const location = data.location || "";
-
-    const condMatch  = aiText.match(/Condition Overview[:\s]+([^
-]+)/i);
-    const interMatch = aiText.match(/Interpretation[:\s]+([^
-]+)/i);
-    const concMatch  = aiText.match(/Conclusion[:\s]+([^
-]+)/i);
-    const base = (condMatch || interMatch || concMatch)?.[1]?.trim() || "";
-    if (base.length > 20) {
-      return name + " with " + disease + (location ? " in " + location : "") + ": " + base;
-    }
-    return "";
+    if (!aiText) return "";
+    return parseFromText(aiText, data.patientName || "The patient", data.disease || "this condition", data.location || "").insight;
   };
 
   const getClinicalTrials = (data) => {
