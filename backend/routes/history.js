@@ -38,12 +38,11 @@ router.post("/save", async (req, res) => {
   }
 });
 
-// ✅ GET SINGLE CASE
-router.get("/:id", async (req, res) => {
+// ✅ GET ALL HISTORY (FIXES YOUR ERROR)
+router.get("/", async (req, res) => {
   try {
-    const item = await History.findById(req.params.id);
-    if (!item) return res.status(404).json({ error: "Case not found" });
-    res.json(item);
+    const allHistory = await History.find().sort({ createdAt: -1 });
+    res.json(allHistory);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
