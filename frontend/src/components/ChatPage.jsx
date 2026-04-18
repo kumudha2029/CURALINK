@@ -334,29 +334,7 @@ function ChatPage() {
         if (typeof normedInsight === "string" && normedInsight.trim().length > 10)
           setPersonalizedInsight(normedInsight);
 
-        setMessages(current => {
-          const payload = {
-            ...updatedCase,
-            symptoms            : updatedCase.query,
-            response            : text,
-            messages            : current,
-            primarySources      : parseEvidence(data).papers,
-            clinicalTrials      : parseEvidence(data).trials,
-            riskLevel           : normedRisk,
-            keyTakeaways        : Array.isArray(normedTakeaways) ? normedTakeaways : [],
-            personalizedInsight : typeof normedInsight === "string" ? normedInsight : "",
-          };
-          setLocalHistory(h => {
-            const rest = h.filter(x =>
-              !(x.patientName === payload.patientName && x.disease === payload.disease));
-            return [payload, ...rest];
-          });
-          fetch(`${API_BASE}/api/history/save`, {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify(payload),
-          }).catch(e => console.error("Save failed:", e));
-          return current;
-        });
+        // typing done - save is handled by handleSend after extraction completes
       }
     }, 15);
   };
@@ -399,29 +377,65 @@ function ChatPage() {
       // Typing animation starts immediately; Claude extraction runs in parallel
       typeText(aiText || "No response received.", updatedCase, data);
 
-      if (!hasTakeaways || !hasInsight) {
-        // Step 1: apply local regex parser instantly (no network needed)
-        const local = parseTakeawaysAndInsight(aiText, updatedCase);
-        if (!hasTakeaways && local.takeaways.length > 0) setKeyTakeaways(local.takeaways);
-        if (!hasInsight   && local.insight)              setPersonalizedInsight(local.insight);
+      // Determine final takeaways & insight, then save once
+      let finalTakeaways = hasTakeaways ? backendTakeaways : [];
+      let finalInsight   = hasInsight   ? backendInsight   : "";
 
-        // Step 2: upgrade with Claude API in background (better quality)
-        const needsClaudeUpgrade = (!hasTakeaways && local.takeaways.length === 0) ||
-                                   (!hasInsight   && !local.insight);
+      if (!hasTakeaways || !hasInsight) {
+        // Step 1: local regex (instant)
+        const local = parseTakeawaysAndInsight(aiText, updatedCase);
+        if (!hasTakeaways && local.takeaways.length > 0) {
+          finalTakeaways = local.takeaways;
+          setKeyTakeaways(local.takeaways);
+        }
+        if (!hasInsight && local.insight) {
+          finalInsight = local.insight;
+          setPersonalizedInsight(local.insight);
+        }
+
+        // Step 2: Claude API upgrade if still missing
+        const needsClaudeUpgrade = (!hasTakeaways && finalTakeaways.length === 0) ||
+                                   (!hasInsight   && !finalInsight);
         if (needsClaudeUpgrade) {
           setExtracting(true);
-          extractWithClaude(
-            aiText,
-            updatedCase.patientName || "the patient",
-            updatedCase.disease     || "this condition",
-            updatedCase.location    || ""
-          ).then(({ takeaways, insight }) => {
-            if (!hasTakeaways && takeaways.length > 0) setKeyTakeaways(takeaways);
-            if (!hasInsight   && insight)              setPersonalizedInsight(insight);
-            setExtracting(false);
-          }).catch(() => setExtracting(false));
+          try {
+            const { takeaways: ct, insight: ci } = await extractWithClaude(
+              aiText,
+              updatedCase.patientName || "the patient",
+              updatedCase.disease     || "this condition",
+              updatedCase.location    || ""
+            );
+            if (!hasTakeaways && ct.length > 0) { finalTakeaways = ct; setKeyTakeaways(ct); }
+            if (!hasInsight   && ci)            { finalInsight   = ci; setPersonalizedInsight(ci); }
+          } catch (_) {}
+          setExtracting(false);
         }
       }
+
+      // Save to DB AFTER extraction is complete
+      setMessages(current => {
+        const payload = {
+          ...updatedCase,
+          symptoms            : updatedCase.query,
+          response            : aiText,
+          messages            : current,
+          primarySources      : parseEvidence(data).papers,
+          clinicalTrials      : parseEvidence(data).trials,
+          riskLevel           : normedRisk,
+          keyTakeaways        : finalTakeaways,
+          personalizedInsight : finalInsight,
+        };
+        setLocalHistory(h => {
+          const rest = h.filter(x =>
+            !(x.patientName === payload.patientName && x.disease === payload.disease));
+          return [payload, ...rest];
+        });
+        fetch(`${API_BASE}/api/history/save`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify(payload),
+        }).catch(e => console.error("Save failed:", e));
+        return current;
+      });
     } catch (err) {
       console.error(err);
       setMessages(prev => [...prev, { type:"bot", text:"Server error. Please try again." }]);
