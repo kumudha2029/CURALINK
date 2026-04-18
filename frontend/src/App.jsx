@@ -19,7 +19,7 @@ function App() {
   // ✅ FIX 1: Enhanced Query Function
   const sendQuery = async (formData) => {
     try {
-      const res = await fetch("http://localhost:5000/api/research/query", {
+      const res = await fetch("https://curalink-backend-ix2f.onrender.com/api/research/query", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -25,7 +25,7 @@ function HistoryPage() {
   }, []);
 
   const fetchHistory = () => {
-    fetch("http://localhost:5000/api/history")
+    fetch("https://curalink-backend-ix2f.onrender.com/api/history")
       .then((res) => res.json())
       .then((data) => setHistory(data))
       .catch((err) => console.error("Error fetching history:", err));

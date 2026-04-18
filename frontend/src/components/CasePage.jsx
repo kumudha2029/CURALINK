@@ -7,7 +7,7 @@ import {
   FaDownload, FaArrowLeft, FaClipboardList, FaUserMd
 } from "react-icons/fa";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "https://curalink-backend-ix2f.onrender.com";
 
 function CasePage() {
   const { id } = useParams();
