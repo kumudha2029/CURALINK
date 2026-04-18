@@ -38,7 +38,6 @@ router.post("/save", async (req, res) => {
   }
 });
 
-// ✅ GET ALL HISTORY (FIXES YOUR ERROR)
 router.get("/", async (req, res) => {
   try {
     const data = await History.find().sort({ createdAt: -1 });
@@ -47,7 +46,6 @@ router.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // ✅ GET SINGLE CASE
 router.get("/:id", async (req, res) => {
   try {
