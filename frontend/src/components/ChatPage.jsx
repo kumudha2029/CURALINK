@@ -176,7 +176,7 @@ const EMPTY_PHRASES = ['no research data found','no data found for this','no res
 
 /* Claude API extraction - runs only if VITE_ANTHROPIC_API_KEY is set */
 const extractWithClaude = async (aiText, patientName, disease, location) => {
-  const key = (typeof import_meta_env !== 'undefined' && import.meta.env.VITE_ANTHROPIC_API_KEY) || '';
+  const key = import.meta.env.VITE_ANTHROPIC_API_KEY || '';
   if (!key || aiText.length < 40) return { takeaways: [], insight: '' };
   try {
     const prompt = `You are a clinical AI assistant. Extract from this medical response:\n1. KEY TAKEAWAYS: 3-4 bullet points a doctor would act on (1 sentence each).\n2. PERSONALIZED INSIGHT: 1-2 sentences for patient "${patientName}" with "${disease}"${location ? ` in ${location}` : ''}.\nReturn ONLY valid JSON: {"keyTakeaways": [...], "personalizedInsight": "..."}\nResponse: ${aiText.slice(0, 2500)}`;
@@ -406,9 +406,7 @@ function ChatPage() {
         }
 
         // Step 2: Claude API upgrade only if API key is configured
-        const apiKey = typeof import !== 'undefined' ? (import.meta?.env?.VITE_ANTHROPIC_API_KEY || '') : '';
-        const needsClaudeUpgrade = !!apiKey && ((!hasTakeaways && finalTakeaways.length === 0) ||
-                                   (!hasInsight   && !finalInsight));
+        const needsClaudeUpgrade = false; // Claude API extraction disabled; local parser handles takeaways
         if (needsClaudeUpgrade) {
           setExtracting(true);
           try {
