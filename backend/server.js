@@ -9,13 +9,9 @@ const { handleQuery } = require("./controllers/researchController");
 
 const app = express();
 
-// ✅ Middleware
 app.use(cors({
-  origin: "https://curalink-181hqkw81-kumudhasris-projects.vercel.app",
-  methods: ["GET", "POST"],
-  credentials: true
+  origin: "*"
 }));
-
 app.use(express.json());
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))
