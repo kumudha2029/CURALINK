@@ -299,8 +299,11 @@ function ChatPage() {
       if (i >= text.length) {
         clearInterval(iv);
         setRiskLevel(normedRisk);
-        setKeyTakeaways(Array.isArray(normedTakeaways) ? normedTakeaways : []);
-        setPersonalizedInsight(typeof normedInsight === "string" ? normedInsight : "");
+        // Only overwrite if backend actually provided values (don't wipe out already-set data)
+        if (Array.isArray(normedTakeaways) && normedTakeaways.length > 0)
+          setKeyTakeaways(normedTakeaways);
+        if (typeof normedInsight === "string" && normedInsight.trim().length > 10)
+          setPersonalizedInsight(normedInsight);
 
         setMessages(current => {
           const payload = {
