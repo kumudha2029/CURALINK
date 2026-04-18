@@ -11,7 +11,7 @@ import {
 import Sidebar from "./Sidebar";
 import ChatHero from "./ChatHero";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "https://curalink-backend-ix2f.onrender.com";
 
 /* ─── pure helpers (outside component) ───────────────────────── */
 
@@ -111,28 +111,25 @@ const parseEvidence = (data) => {
 
 
 
-/* ─── Local regex parser: instant takeaways + insight (no network) ─ */
+/* Local regex parser: instant takeaways + insight (no network) */
 const parseTakeawaysAndInsight = (aiText = "", caseObj = {}) => {
   const takeaways = [];
   const lines = aiText.split(/\n/);
   for (const line of lines) {
-    const stripped = line.replace(/^[\s•\-*\d.]+/, "").trim();
+    const stripped = line.replace(/^[\s\-*\d.]+/, "").trim();
     if (stripped.length > 30 && stripped.length < 300 &&
         /\b(risk|treatment|recommend|finding|trial|evidence|patient|therapy|outcome|suggest|indicate|show|reveal|associat)\b/i.test(stripped)) {
       takeaways.push(stripped);
       if (takeaways.length >= 4) break;
     }
   }
-
-  // Derive a simple personalized insight from the text
   const patientName = caseObj.patientName || "the patient";
   const disease     = caseObj.disease     || "this condition";
   const location    = caseObj.location    || "";
   const sentMatch   = aiText.match(/[^.!?]*\b(patient|treatment|therapy|risk|recommend)[^.!?]*[.!?]/i);
   const insight = sentMatch
-    ? `For ${patientName} with ${disease}${location ? ` in ${location}` : ""}: ${sentMatch[0].trim()}`
+    ? "For " + patientName + " with " + disease + (location ? " in " + location : "") + ": " + sentMatch[0].trim()
     : "";
-
   return { takeaways, insight };
 };
 
