@@ -394,3 +394,30 @@ const modalContent = {
   padding: "20px",
   borderRadius: "10px",
 };
+const continueBtnStyle = {
+  background: "#e0f2fe",
+  border: "none",
+  color: "#0369a1",
+  padding: "8px 14px",
+  borderRadius: "10px",
+  cursor: "pointer",
+  marginRight: "10px",
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const deleteBtnStyle = {
+  background: "#fee2e2",
+  border: "none",
+  color: "#ef4444",
+  padding: "10px",
+  borderRadius: "10px",
+  cursor: "pointer",
+  marginRight: "10px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
