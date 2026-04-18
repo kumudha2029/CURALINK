@@ -246,4 +246,60 @@ const modalText = { fontSize: '14px', color: '#64748b', lineHeight: '1.6', margi
 const modalActionRow = { display: 'flex', gap: '12px' };
 const cancelBtn = { flex: 1, padding: '12px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#fff', fontWeight: '700', color: '#64748b', cursor: 'pointer' };
 const confirmBtn = { flex: 1, padding: '12px', borderRadius: '12px', border: 'none', background: '#ef4444', fontWeight: '700', color: '#fff', cursor: 'pointer' };
+function RecordRow({ item, navigate, onDelete, isLast }) {
+  return (
+    <div
+      style={{
+        ...rowStyle,
+        borderBottom: isLast ? "none" : "1px solid #f1f5f9",
+      }}
+      onClick={() => navigate(`/case/${item._id}`)}
+    >
+      <div style={rowLeft}>
+        <div style={{ ...avatar, background: "#e0f2fe" }}>
+          <FaUserMd color="#0369a1" />
+        </div>
+        <div>
+          <div style={pName}>{item.patientName || "Unknown"}</div>
+          <div style={pDisease}>{item.disease || "No disease"}</div>
+          <div style={rowTime}>
+            {new Date(item.createdAt).toLocaleString()}
+          </div>
+        </div>
+      </div>
+
+      <div style={rowRight}>
+        {/* CONTINUE BUTTON */}
+        <button
+          style={continueBtnStyle}
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate("/", {
+              state: {
+                resumeChat: true,
+                prevMessages: item.messages || [],
+                patientName: item.patientName,
+                disease: item.disease,
+                primarySources: item.primarySources || [],
+                clinicalTrials: item.clinicalTrials || [],
+              },
+            });
+          }}
+        >
+          <FaCommentMedical /> Continue
+        </button>
+
+        {/* DELETE BUTTON */}
+        <button
+          style={deleteBtnStyle}
+          onClick={(e) => onDelete(e, item._id)}
+        >
+          <FaTrashAlt />
+        </button>
+
+        <FaChevronRight style={{ color: "#94a3b8" }} />
+      </div>
+    </div>
+  );
+}
 export default HistoryPage;
