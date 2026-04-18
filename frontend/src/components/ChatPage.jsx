@@ -112,7 +112,12 @@ const parseEvidence = (data) => {
 
 
 /* ─── Claude API: extract structured takeaways + insight ───────── */
+const EMPTY_PHRASES = ['no research data','no data found','no results','not found','unable to find','no information','could not find','no relevant'];
+
 const extractWithClaude = async (aiText, patientName, disease, location) => {
+  const textLower = (aiText || '').toLowerCase().trim();
+  if (!textLower || textLower.length < 40) return { takeaways: [], insight: '' };
+  if (EMPTY_PHRASES.some(p => textLower.includes(p))) return { takeaways: [], insight: '' };
   try {
     const prompt = `You are a clinical AI assistant. Given this medical AI response, extract:
 1. KEY TAKEAWAYS: exactly 3-4 concise, clinically meaningful bullet points a doctor would act on. Each should be 1 sentence, specific, and actionable or informative.
@@ -129,15 +134,19 @@ Medical AI response to analyze:
 ${aiText.slice(0, 3000)}
 """`;
 
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 10000);
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+        max_tokens: 500,
         messages: [{ role: "user", content: prompt }],
       }),
     });
+    clearTimeout(timeoutId);
     const data = await res.json();
     const raw = (data.content || []).map(b => b.text || "").join("").trim();
     const clean = raw.replace(/```json|```/g, "").trim();
@@ -180,6 +189,7 @@ function ChatPage() {
   const [keyTakeaways,        setKeyTakeaways]        = useState([]);
   const [personalizedInsight, setPersonalizedInsight] = useState("");
   const [evidence,            setEvidence]            = useState({ papers: [], trials: [] });
+  const [extracting,          setExtracting]          = useState(false);
 
   /* auto-scroll */
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
@@ -323,8 +333,7 @@ function ChatPage() {
     if (!queryText.trim()) return;
 
     setMessages(prev => [...prev, { type:"user", text:queryText }]);
-    setInput(""); setLoading(true); setPatientMode(false);
-    // Clear stale values so cards show a loading state
+    setInput(""); setLoading(true); setPatientMode(false); setExtracting(false);
     setKeyTakeaways([]);
     setPersonalizedInsight("");
 
@@ -357,6 +366,7 @@ function ChatPage() {
       typeText(aiText || "No response received.", updatedCase, data);
 
       if (!hasTakeaways || !hasInsight) {
+        setExtracting(true);
         extractWithClaude(
           aiText,
           updatedCase.patientName || "the patient",
@@ -365,7 +375,8 @@ function ChatPage() {
         ).then(({ takeaways, insight }) => {
           if (!hasTakeaways && takeaways.length > 0) setKeyTakeaways(takeaways);
           if (!hasInsight   && insight)              setPersonalizedInsight(insight);
-        });
+          setExtracting(false);
+        }).catch(() => setExtracting(false));
       }
     } catch (err) {
       console.error(err);
@@ -553,16 +564,16 @@ function ChatPage() {
                                       <span style={{color:"#1e293b", fontSize:"0.87rem", lineHeight:1.6}}>{k}</span>
                                     </div>
                                   ))
-                                : <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
-                                    <div style={{display:"flex",gap:"4px"}}>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                : extracting
+                                  ? <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
+                                      <div style={{display:"flex",gap:"4px"}}>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#0891b2",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                      </div>
+                                      <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>Extracting clinical takeaways…</p>
                                     </div>
-                                    <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
-                                      Extracting clinical takeaways…
-                                    </p>
-                                  </div>}
+                                  : <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>No key takeaways available for this query.</p>}
                             </div>
 
                             <div style={aiCard("#16a34a")}>
@@ -573,16 +584,16 @@ function ChatPage() {
                                 ? <p style={{margin:0,lineHeight:1.7,fontSize:"0.9rem",color:"#1e293b",borderLeft:"3px solid #16a34a",paddingLeft:"10px"}}>
                                     {personalizedInsight}
                                   </p>
-                                : <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
-                                    <div style={{display:"flex",gap:"4px"}}>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
-                                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                : extracting
+                                  ? <div style={{display:"flex",alignItems:"center",gap:"10px",padding:"4px 0"}}>
+                                      <div style={{display:"flex",gap:"4px"}}>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0s"}}/>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.2s"}}/>
+                                        <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#16a34a",display:"inline-block",animation:"curaBounce 1.1s ease-in-out infinite",animationDelay:"0.4s"}}/>
+                                      </div>
+                                      <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>Personalizing insight for this patient…</p>
                                     </div>
-                                    <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>
-                                      Personalizing insight for this patient…
-                                    </p>
-                                  </div>}
+                                  : <p style={{margin:0,fontSize:"0.85rem",color:"#94a3b8",fontStyle:"italic"}}>No personalized insight available for this query.</p>}
                             </div>
                           </>
                         )}
