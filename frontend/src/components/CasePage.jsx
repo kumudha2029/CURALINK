@@ -38,14 +38,79 @@ function CasePage() {
   const getSources = (data) =>
     data.primarySources || data.topPapers || data.papers || data.sources || [];
 
+  // Parse takeaways from DB field OR directly from the AI response text
   const getKeyTakeaways = (data) => {
     const val = data.keyTakeaways || data.key_takeaways || data.takeaways;
-    return Array.isArray(val) && val.length > 0 ? val : [];
+    if (Array.isArray(val) && val.length > 0) return val;
+
+    // Fall back: parse from the raw AI response text
+    const aiText = data.response || data.aiResponse || data.ai_response || "";
+    if (!aiText) return [];
+    const takeaways = [];
+
+    // Try "Key Research Insights" bullet section
+    const kriMatch = aiText.match(/Key Research Insights[\s\S]*?(?=Clinical Trials|Interpretation|Conclusion|$)/i);
+    if (kriMatch) {
+      const bullets = kriMatch[0].split(/\u2022|
+\u2022|
+-|
+\*/);
+      for (const b of bullets.slice(1)) {
+        const t = b.replace(/\s*\u2014[^
+]*/g,"").replace(/\s+/g," ").trim();
+        if (t.length > 20 && t.length < 250) { takeaways.push(t); if (takeaways.length >= 4) break; }
+      }
+    }
+
+    // Try Interpretation / Conclusion sentences
+    if (takeaways.length === 0) {
+      for (const sec of ["Interpretation","Conclusion","Summary"]) {
+        const m = aiText.match(new RegExp(sec + "[:\s]+([\s\S]*?)(?=\n\n|$)", "i"));
+        if (m) {
+          const sents = (m[1].match(/[^.!?]+[.!?]+/g) || []).map(s => s.trim()).filter(s => s.length > 30);
+          takeaways.push(...sents.slice(0, 4));
+          if (takeaways.length > 0) break;
+        }
+      }
+    }
+
+    // Last resort: any sentence with clinical keywords
+    if (takeaways.length === 0) {
+      const sents = aiText.match(/[^.!?]+[.!?]+/g) || [];
+      for (const s of sents) {
+        const t = s.replace(/^[\s\u2022\-*\d.]+/,"").trim();
+        if (t.length > 40 && t.length < 250 &&
+            /(risk|treatment|recommend|therapy|outcome|evidence|trial|diagnosis|patient)/i.test(t)) {
+          takeaways.push(t);
+          if (takeaways.length >= 4) break;
+        }
+      }
+    }
+    return takeaways;
   };
 
+  // Parse insight from DB field OR directly from the AI response text
   const getPersonalizedInsight = (data) => {
     const val = data.personalizedInsight || data.personalized_insight || data.insight || "";
-    return typeof val === "string" ? val.trim() : "";
+    if (typeof val === "string" && val.trim().length > 10) return val.trim();
+
+    // Fall back: build insight from Condition Overview / Interpretation in AI text
+    const aiText = data.response || data.aiResponse || data.ai_response || "";
+    const name = data.patientName || "The patient";
+    const disease = data.disease || "this condition";
+    const location = data.location || "";
+
+    const condMatch  = aiText.match(/Condition Overview[:\s]+([^
+]+)/i);
+    const interMatch = aiText.match(/Interpretation[:\s]+([^
+]+)/i);
+    const concMatch  = aiText.match(/Conclusion[:\s]+([^
+]+)/i);
+    const base = (condMatch || interMatch || concMatch)?.[1]?.trim() || "";
+    if (base.length > 20) {
+      return name + " with " + disease + (location ? " in " + location : "") + ": " + base;
+    }
+    return "";
   };
 
   const getClinicalTrials = (data) => {
@@ -222,15 +287,9 @@ function CasePage() {
             <div style={card("#3b82f6")}>
               <h3 style={cardTitle}><FaCheckCircle color="#3b82f6" /> Key Takeaways</h3>
               <ul style={listStyle}>
-                {takeaways.length > 0 ? (
-                  takeaways.map((item, idx) => <li key={idx}>{item}</li>)
-                ) : (
-                  <>
-                    <li>Early diagnosis improves outcomes</li>
-                    <li>Targeted therapy recommended</li>
-                    <li>Regular monitoring required</li>
-                  </>
-                )}
+                {takeaways.length > 0
+                  ? takeaways.map((item, idx) => <li key={idx}>{item}</li>)
+                  : <li style={{color:'#94a3b8',fontStyle:'italic'}}>No key takeaways available.</li>}
               </ul>
             </div>
 
