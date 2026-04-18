@@ -96,7 +96,7 @@ const parseEvidence = (data) => {
           return {
             title    : title.slice(0, 120) || b.slice(0, 80),
             status   : sm ? sm[1] : "UNKNOWN",
-            location : "India",
+            location : "",
           };
         })
         .filter(t => t.title.length > 5);
@@ -112,12 +112,14 @@ const parseEvidence = (data) => {
 
 
 /* ─── Claude API: extract structured takeaways + insight ───────── */
-const EMPTY_PHRASES = ['no research data','no data found','no results','not found','unable to find','no information','could not find','no relevant'];
+const EMPTY_PHRASES = ['no research data found','no data found for this','no results found','unable to find any','no information available','could not find any research'];
 
 const extractWithClaude = async (aiText, patientName, disease, location) => {
   const textLower = (aiText || '').toLowerCase().trim();
   if (!textLower || textLower.length < 40) return { takeaways: [], insight: '' };
-  if (EMPTY_PHRASES.some(p => textLower.includes(p))) return { takeaways: [], insight: '' };
+  // Only skip if the ENTIRE response is a dead-end (short + matches empty phrase)
+  const isEmptyResponse = textLower.length < 120 && EMPTY_PHRASES.some(p => textLower.includes(p));
+  if (isEmptyResponse) return { takeaways: [], insight: '' };
   try {
     const prompt = `You are a clinical AI assistant. Given this medical AI response, extract:
 1. KEY TAKEAWAYS: exactly 3-4 concise, clinically meaningful bullet points a doctor would act on. Each should be 1 sentence, specific, and actionable or informative.
@@ -366,17 +368,27 @@ function ChatPage() {
       typeText(aiText || "No response received.", updatedCase, data);
 
       if (!hasTakeaways || !hasInsight) {
-        setExtracting(true);
-        extractWithClaude(
-          aiText,
-          updatedCase.patientName || "the patient",
-          updatedCase.disease     || "this condition",
-          updatedCase.location    || ""
-        ).then(({ takeaways, insight }) => {
-          if (!hasTakeaways && takeaways.length > 0) setKeyTakeaways(takeaways);
-          if (!hasInsight   && insight)              setPersonalizedInsight(insight);
-          setExtracting(false);
-        }).catch(() => setExtracting(false));
+        // Step 1: apply local regex parser instantly (no network needed)
+        const local = parseTakeawaysAndInsight(aiText, updatedCase);
+        if (!hasTakeaways && local.takeaways.length > 0) setKeyTakeaways(local.takeaways);
+        if (!hasInsight   && local.insight)              setPersonalizedInsight(local.insight);
+
+        // Step 2: upgrade with Claude API in background (better quality)
+        const needsClaudeUpgrade = (!hasTakeaways && local.takeaways.length === 0) ||
+                                   (!hasInsight   && !local.insight);
+        if (needsClaudeUpgrade) {
+          setExtracting(true);
+          extractWithClaude(
+            aiText,
+            updatedCase.patientName || "the patient",
+            updatedCase.disease     || "this condition",
+            updatedCase.location    || ""
+          ).then(({ takeaways, insight }) => {
+            if (!hasTakeaways && takeaways.length > 0) setKeyTakeaways(takeaways);
+            if (!hasInsight   && insight)              setPersonalizedInsight(insight);
+            setExtracting(false);
+          }).catch(() => setExtracting(false));
+        }
       }
     } catch (err) {
       console.error(err);
@@ -697,11 +709,16 @@ function ChatPage() {
                             <span style={trialBadge(t.status==="COMPLETED"?"#16a34a":t.status==="RECRUITING"?"#0369a1":"#f59e0b")}>
                               ● {t.status || "UNKNOWN"}
                             </span>
-                            {(t.location || currentCase?.location) && (
-                              <span style={{...trialBadge("#6366f1"), display:"flex", alignItems:"center", gap:"3px"}}>
-                                <FaMapMarkerAlt style={{fontSize:"0.6rem"}}/> {t.location || currentCase?.location}
-                              </span>
-                            )}
+{(() => {
+                              const loc = (t.location && !t.location.toLowerCase().includes('not spec') && !t.location.toLowerCase().includes('unknown'))
+                                ? t.location
+                                : currentCase?.location;
+                              return loc
+                                ? <span style={{...trialBadge("#6366f1"), display:"flex", alignItems:"center", gap:"3px"}}>
+                                    <FaMapMarkerAlt style={{fontSize:"0.6rem"}}/> {loc}
+                                  </span>
+                                : null;
+                            })()} 
                             {t.phase && (
                               <span style={trialBadge("#64748b")}>Phase {t.phase}</span>
                             )}
