@@ -111,6 +111,31 @@ const parseEvidence = (data) => {
 
 
 
+/* ─── Local regex parser: instant takeaways + insight (no network) ─ */
+const parseTakeawaysAndInsight = (aiText = "", caseObj = {}) => {
+  const takeaways = [];
+  const lines = aiText.split(/\n/);
+  for (const line of lines) {
+    const stripped = line.replace(/^[\s•\-*\d.]+/, "").trim();
+    if (stripped.length > 30 && stripped.length < 300 &&
+        /\b(risk|treatment|recommend|finding|trial|evidence|patient|therapy|outcome|suggest|indicate|show|reveal|associat)\b/i.test(stripped)) {
+      takeaways.push(stripped);
+      if (takeaways.length >= 4) break;
+    }
+  }
+
+  // Derive a simple personalized insight from the text
+  const patientName = caseObj.patientName || "the patient";
+  const disease     = caseObj.disease     || "this condition";
+  const location    = caseObj.location    || "";
+  const sentMatch   = aiText.match(/[^.!?]*\b(patient|treatment|therapy|risk|recommend)[^.!?]*[.!?]/i);
+  const insight = sentMatch
+    ? `For ${patientName} with ${disease}${location ? ` in ${location}` : ""}: ${sentMatch[0].trim()}`
+    : "";
+
+  return { takeaways, insight };
+};
+
 /* ─── Claude API: extract structured takeaways + insight ───────── */
 const EMPTY_PHRASES = ['no research data found','no data found for this','no results found','unable to find any','no information available','could not find any research'];
 
@@ -137,11 +162,16 @@ ${aiText.slice(0, 3000)}
 """`;
 
     const controller = new AbortController();
-    const timeoutId  = setTimeout(() => controller.abort(), 10000);
+    const timeoutId  = setTimeout(() => controller.abort(), 20000);
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY || "",
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 500,
@@ -150,9 +180,11 @@ ${aiText.slice(0, 3000)}
     });
     clearTimeout(timeoutId);
     const data = await res.json();
+    if (!res.ok) throw new Error(`API ${res.status}`);
     const raw = (data.content || []).map(b => b.text || "").join("").trim();
     const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    let parsed;
+    try { parsed = JSON.parse(clean); } catch { return { takeaways: [], insight: "" }; }
     return {
       takeaways : Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
       insight   : typeof parsed.personalizedInsight === "string" ? parsed.personalizedInsight : "",
