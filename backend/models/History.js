@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const HistorySchema = new mongoose.Schema({
   patientName: String,
   disease: String,
+  location: String,
   symptoms: String,
 
   // ✅ MAIN AI RESPONSE (USED IN CASE PAGE + PDF)
@@ -18,6 +19,11 @@ const HistorySchema = new mongoose.Schema({
 
   primarySources: Array,
   clinicalTrials: Array,
+
+  // ✅ ANALYSIS FIELDS (were missing — caused blank panels on resume)
+  riskLevel: { type: Number, default: 60 },
+  keyTakeaways: { type: Array, default: [] },
+  personalizedInsight: { type: String, default: "" },
 
   createdAt: {
     type: Date,
