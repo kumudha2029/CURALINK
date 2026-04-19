@@ -264,19 +264,27 @@ function ChatPage() {
   /* ── restore session when arriving from HistoryPage "Continue" ── */
   useEffect(() => {
     if (!location.state?.resumeChat) return;
-    const { prevMessages, patientName, disease,
-            riskLevel: rl, keyTakeaways: kt,
-            personalizedInsight: pi, primarySources, clinicalTrials } = location.state;
+    const {
+      prevMessages, patientName, disease, location: loc,
+      riskLevel: rl, keyTakeaways: kt,
+      personalizedInsight: pi, primarySources, clinicalTrials,
+      response, aiResponse,
+    } = location.state;
     setMessages(prevMessages || []);
-    setCurrentCase({ patientName, disease });
+    setCurrentCase({ patientName, disease, location: loc || "" });
     setRiskLevel(rl ?? 60);
-    setKeyTakeaways(kt || []);
-    setPersonalizedInsight(pi || "");
-    setEvidence(parseEvidence({
-      aiResponse     : location.state.response || location.state.aiResponse || "",
-      topPapers      : primarySources,
-      clinicalTrials : clinicalTrials,
-    }));
+    setKeyTakeaways(Array.isArray(kt) && kt.length > 0 ? kt : []);
+    setPersonalizedInsight(typeof pi === "string" ? pi : "");
+    const ev = parseEvidence({
+      aiResponse     : response || aiResponse || "",
+      topPapers      : primarySources || [],
+      clinicalTrials : clinicalTrials || [],
+    });
+    // If parseEvidence couldn't extract from empty text, use the raw arrays directly
+    setEvidence({
+      papers : ev.papers.length > 0 ? ev.papers : (primarySources || []),
+      trials : ev.trials.length > 0 ? ev.trials : (clinicalTrials || []),
+    });
     window.history.replaceState({}, ""); // clear so refresh doesn't re-restore
   }, [location.state]);
 
@@ -304,17 +312,25 @@ function ChatPage() {
     setCurrentCase({
       patientName : item.patientName,
       disease     : item.disease,
-      location    : item.location,
+      location    : item.location || "",
       query       : item.symptoms || item.query,
     });
     setRiskLevel(pick(item, "riskLevel","risk_level","risk") ?? 60);
     setKeyTakeaways(pick(item, "keyTakeaways","key_takeaways","takeaways") || []);
     setPersonalizedInsight(pick(item, "personalizedInsight","personalized_insight","insight") || "");
-    setEvidence(parseEvidence({
+
+    const rawPapers = pick(item, "primarySources","topPapers","papers","sources") ||
+                      item.evidence?.papers || [];
+    const rawTrials = item.clinicalTrials || item.evidence?.trials || [];
+    const ev = parseEvidence({
       aiResponse     : item.response || item.aiResponse || "",
-      topPapers      : pick(item, "primarySources","topPapers","papers","sources"),
-      clinicalTrials : item.clinicalTrials,
-    }));
+      topPapers      : rawPapers,
+      clinicalTrials : rawTrials,
+    });
+    setEvidence({
+      papers : ev.papers.length > 0 ? ev.papers : rawPapers,
+      trials : ev.trials.length > 0 ? ev.trials : rawTrials,
+    });
     setPatientMode(false);
     setInput("");
   };

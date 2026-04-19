@@ -211,8 +211,13 @@ function RecordRow({ item, navigate, onDelete, isLast }) {
                 prevMessages: item.messages || [],
                 patientName: item.patientName,
                 disease: item.disease,
+                location: item.location || "",
                 primarySources: item.primarySources || [],
                 clinicalTrials: item.clinicalTrials || [],
+                riskLevel: item.riskLevel ?? 60,
+                keyTakeaways: item.keyTakeaways || [],
+                personalizedInsight: item.personalizedInsight || "",
+                response: item.response || item.aiResponse || "",
               },
             });
           }}
