@@ -32,9 +32,16 @@ function Sidebar({
               _id: item._id,
               patientName: item.patientName,
               disease: item.disease,
+              location: item.location || "",
               query: item.symptoms,
+              symptoms: item.symptoms,
+              response: item.response || item.aiResponse || "",
+              // keep top-level source arrays so restoreSession can read them directly
+              primarySources: item.primarySources || [],
+              clinicalTrials: item.clinicalTrials || [],
+              // also keep nested for any code that reads evidence.papers / evidence.trials
               evidence: { papers: item.primarySources || [], trials: item.clinicalTrials || [] },
-              riskLevel: item.riskLevel,
+              riskLevel: item.riskLevel ?? 60,
               keyTakeaways: item.keyTakeaways || [],
               personalizedInsight: item.personalizedInsight || "",
               messages: item.messages && item.messages.length > 0

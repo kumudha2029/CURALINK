@@ -308,6 +308,21 @@ function ChatPage() {
      restores messages + all analysis state instantly.
   ══════════════════════════════════════════════════════════════ */
   const restoreSession = (item) => {
+    // Debug: inspect exactly what fields arrived
+    console.log("[restoreSession] item:", JSON.stringify({
+      patientName: item.patientName,
+      disease: item.disease,
+      riskLevel: item.riskLevel,
+      keyTakeaways: item.keyTakeaways,
+      personalizedInsight: item.personalizedInsight,
+      primarySources: item.primarySources,
+      clinicalTrials: item.clinicalTrials,
+      evidencePapers: item.evidence?.papers,
+      evidenceTrials: item.evidence?.trials,
+      responseLen: (item.response || "").length,
+      messagesLen: (item.messages || []).length,
+    }, null, 2));
+
     setMessages(item.messages || []);
     setCurrentCase({
       patientName : item.patientName,
@@ -315,18 +330,27 @@ function ChatPage() {
       location    : item.location || "",
       query       : item.symptoms || item.query,
     });
-    setRiskLevel(pick(item, "riskLevel","risk_level","risk") ?? 60);
-    setKeyTakeaways(pick(item, "keyTakeaways","key_takeaways","takeaways") || []);
-    setPersonalizedInsight(pick(item, "personalizedInsight","personalized_insight","insight") || "");
+    setRiskLevel(item.riskLevel ?? pick(item, "risk_level","risk") ?? 60);
+    setKeyTakeaways(Array.isArray(item.keyTakeaways) && item.keyTakeaways.length > 0
+      ? item.keyTakeaways
+      : pick(item, "key_takeaways","takeaways") || []);
+    setPersonalizedInsight(item.personalizedInsight ||
+      pick(item, "personalized_insight","insight") || "");
 
-    const rawPapers = pick(item, "primarySources","topPapers","papers","sources") ||
-                      item.evidence?.papers || [];
-    const rawTrials = item.clinicalTrials || item.evidence?.trials || [];
-    const ev = parseEvidence({
-      aiResponse     : item.response || item.aiResponse || "",
-      topPapers      : rawPapers,
-      clinicalTrials : rawTrials,
-    });
+    // Papers: try top-level first, then nested evidence object
+    const rawPapers = (item.primarySources && item.primarySources.length > 0)
+      ? item.primarySources
+      : (item.evidence?.papers || pick(item, "topPapers","papers","sources") || []);
+    const rawTrials = (item.clinicalTrials && item.clinicalTrials.length > 0)
+      ? item.clinicalTrials
+      : (item.evidence?.trials || []);
+
+    // Only run text parser if there's actually a response string to parse
+    const aiText = item.response || item.aiResponse || "";
+    const ev = aiText.length > 40
+      ? parseEvidence({ aiResponse: aiText, topPapers: rawPapers, clinicalTrials: rawTrials })
+      : { papers: rawPapers, trials: rawTrials };
+
     setEvidence({
       papers : ev.papers.length > 0 ? ev.papers : rawPapers,
       trials : ev.trials.length > 0 ? ev.trials : rawTrials,
