@@ -270,20 +270,24 @@ function ChatPage() {
       personalizedInsight: pi, primarySources, clinicalTrials,
       response, aiResponse,
     } = location.state;
-    setMessages(prevMessages || []);
+    const restoredMsgs = (prevMessages || []).map(m =>
+      (m.type === "bot" && (!m.text || m.text.trim() === "") && (response || aiResponse))
+        ? { ...m, text: response || aiResponse }
+        : m
+    );
+    const finalMsgs = restoredMsgs.length > 0 ? restoredMsgs
+      : (response || aiResponse)
+        ? [{ type: "user", text: "" }, { type: "bot", text: response || aiResponse }]
+        : prevMessages || [];
+    setMessages(finalMsgs);
     setCurrentCase({ patientName, disease, location: loc || "" });
     setRiskLevel(rl ?? 60);
     setKeyTakeaways(Array.isArray(kt) && kt.length > 0 ? kt : []);
     setPersonalizedInsight(typeof pi === "string" ? pi : "");
-    const ev = parseEvidence({
-      aiResponse     : response || aiResponse || "",
-      topPapers      : primarySources || [],
-      clinicalTrials : clinicalTrials || [],
-    });
-    // If parseEvidence couldn't extract from empty text, use the raw arrays directly
+    // Use structured arrays directly — skip text re-parsing to avoid bad results
     setEvidence({
-      papers : ev.papers.length > 0 ? ev.papers : (primarySources || []),
-      trials : ev.trials.length > 0 ? ev.trials : (clinicalTrials || []),
+      papers : primarySources || [],
+      trials : clinicalTrials || [],
     });
     window.history.replaceState({}, ""); // clear so refresh doesn't re-restore
   }, [location.state]);
@@ -308,22 +312,20 @@ function ChatPage() {
      restores messages + all analysis state instantly.
   ══════════════════════════════════════════════════════════════ */
   const restoreSession = (item) => {
-    // Debug: inspect exactly what fields arrived
-    console.log("[restoreSession] item:", JSON.stringify({
-      patientName: item.patientName,
-      disease: item.disease,
-      riskLevel: item.riskLevel,
-      keyTakeaways: item.keyTakeaways,
-      personalizedInsight: item.personalizedInsight,
-      primarySources: item.primarySources,
-      clinicalTrials: item.clinicalTrials,
-      evidencePapers: item.evidence?.papers,
-      evidenceTrials: item.evidence?.trials,
-      responseLen: (item.response || "").length,
-      messagesLen: (item.messages || []).length,
-    }, null, 2));
+    const aiText = item.response || item.aiResponse || "";
 
-    setMessages(item.messages || []);
+    // Fix empty bot messages (saved mid-typing) by filling from response field
+    const restoredMessages = (item.messages || []).map(m =>
+      (m.type === "bot" && (!m.text || m.text.trim() === "") && aiText)
+        ? { ...m, text: aiText }
+        : m
+    );
+    // If no messages exist but we have a response, synthesize them
+    const finalMessages = restoredMessages.length > 0 ? restoredMessages : aiText
+      ? [{ type: "user", text: item.symptoms || item.query || "" }, { type: "bot", text: aiText }]
+      : [];
+
+    setMessages(finalMessages);
     setCurrentCase({
       patientName : item.patientName,
       disease     : item.disease,
@@ -345,15 +347,10 @@ function ChatPage() {
       ? item.clinicalTrials
       : (item.evidence?.trials || []);
 
-    // Only run text parser if there's actually a response string to parse
-    const aiText = item.response || item.aiResponse || "";
-    const ev = aiText.length > 40
-      ? parseEvidence({ aiResponse: aiText, topPapers: rawPapers, clinicalTrials: rawTrials })
-      : { papers: rawPapers, trials: rawTrials };
-
+    // Use raw arrays directly if they are already structured objects (don't re-parse)
     setEvidence({
-      papers : ev.papers.length > 0 ? ev.papers : rawPapers,
-      trials : ev.trials.length > 0 ? ev.trials : rawTrials,
+      papers : rawPapers,
+      trials : rawTrials,
     });
     setPatientMode(false);
     setInput("");
